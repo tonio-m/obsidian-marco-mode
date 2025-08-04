@@ -1,13 +1,14 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Editor, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
 
 // Remember to rename these classes and interfaces!
-
 interface MyPluginSettings {
 	mySetting: string;
+	inboxFolder: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+	mySetting: 'default',
+	inboxFolder: '000_inbox'
 }
 
 export default class MyPlugin extends Plugin {
@@ -16,66 +17,56 @@ export default class MyPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
-
-		// This adds a simple command that can be triggered anywhere
+		// Command to navigate to next inbox note
 		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
+			id: 'go-to-next-inbox-note',
+			name: 'Go to next inbox note',
 			callback: () => {
-				new SampleModal(this.app).open();
+				this.goToNextInboxNote();
 			}
 		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+    	this.addRibbonIcon(
+    	    'inbox', 
+    	    'Go to next inbox note',
+    	    (evt: MouseEvent) => {
+    	        this.goToNextInboxNote();
+    	    }
+    	);
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
+		// Command to mark file as read
+		this.addCommand({
+			id: 'mark-file-as-read',
+			name: 'Mark file as read',
+			callback: () => {
+				this.markFileAsRead();
 			}
 		});
+    	this.addRibbonIcon(
+    	    'check-square', 
+    	    'Mark file as read',
+    	    (evt: MouseEvent) => {
+    	        this.markFileAsRead();
+    	    }
+    	);
+
+		// Command to snooze file
+		this.addCommand({
+			id: 'snooze-file',
+			name: 'Snooze file',
+			callback: () => {
+				this.snoozeFile();
+			}
+		});
+    	this.addRibbonIcon(
+    	    'clock', 
+    	    'Snooze file',
+    	    (evt: MouseEvent) => {
+    	        this.snoozeFile();
+    	    }
+    	);
 
 		// This adds a settings tab so the user can configure various aspects of the plugin
 		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
 
 	onunload() {
@@ -89,21 +80,125 @@ export default class MyPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
-}
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
+	async goToNextInboxNote() {
+		// Get all files in the inbox folder
+		const inboxFiles = this.getInboxFiles();
+		if (inboxFiles.length === 0) {
+			new Notice('No files found in inbox folder');
+			return;
+		}
+
+		// Sort files alphabetically by name
+		inboxFiles.sort((a, b) => a.name.localeCompare(b.name));
+
+		// Get current active file
+		const activeFile = this.app.workspace.getActiveFile();
+		let nextFile: TFile;
+
+		if (!activeFile || !this.isFileInInbox(activeFile)) {
+			// No file open or current file is not in inbox, open first file
+			nextFile = inboxFiles[0];
+		} else {
+			// Find current file index and get next one
+			const currentIndex = inboxFiles.findIndex(file => file.path === activeFile.path);
+			const nextIndex = (currentIndex + 1) % inboxFiles.length;
+			nextFile = inboxFiles[nextIndex];
+		}
+
+		// Open the next file
+		await this.app.workspace.getLeaf().openFile(nextFile);
 	}
 
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
+	getInboxFiles(): TFile[] {
+		const inboxPath = this.settings.inboxFolder;
+		const files = this.app.vault.getFiles();
+		return files.filter(file => {
+			const folderPath = file.parent?.path || '';
+			return folderPath === inboxPath || file.path.startsWith(inboxPath + '/');
+		});
 	}
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
+	isFileInInbox(file: TFile): boolean {
+		const inboxPath = this.settings.inboxFolder;
+		const folderPath = file.parent?.path || '';
+		return folderPath === inboxPath || file.path.startsWith(inboxPath + '/');
+	}
+
+	async markFileAsRead() {
+		const activeFile = this.app.workspace.getActiveFile();
+		
+		if (!activeFile) {
+			new Notice('No file is currently open');
+			return;
+		}
+
+		if (!this.isFileInInbox(activeFile)) {
+			new Notice('File is not in the inbox folder');
+			return;
+		}
+
+		// Check if file is already marked as read
+		if (activeFile.name.startsWith('(READ) ')) {
+			new Notice('File is already marked as read');
+			return;
+		}
+
+		// Create new filename with (READ) prefix
+		const newName = '(READ) ' + activeFile.name;
+		const newPath = activeFile.parent ? activeFile.parent.path + '/' + newName : newName;
+
+		try {
+			await this.app.vault.rename(activeFile, newPath);
+			new Notice('File marked as read');
+		} catch (error) {
+			new Notice('Failed to rename file: ' + error.message);
+		}
+	}
+
+	async snoozeFile() {
+		const activeFile = this.app.workspace.getActiveFile();
+		
+		if (!activeFile) {
+			new Notice('No file is currently open');
+			return;
+		}
+
+		if (!this.isFileInInbox(activeFile)) {
+			new Notice('File is not in the inbox folder');
+			return;
+		}
+
+		// Format current time as "EEE HH mm ss" (e.g., "Tue 09 41 00")
+		const now = new Date();
+		const timeString = this.formatTimeForSnooze(now);
+		
+		// Get file extension
+		const extension = activeFile.extension;
+		const nameWithoutExt = activeFile.basename;
+		
+		// Create new filename with time prefix
+		const newName = `${timeString} (snoozed).${extension}`;
+		const newPath = activeFile.parent ? activeFile.parent.path + '/' + newName : newName;
+
+		try {
+			await this.app.vault.rename(activeFile, newPath);
+			new Notice(`File snoozed with timestamp: ${timeString}`);
+		} catch (error) {
+			new Notice('Failed to snooze file: ' + error.message);
+		}
+	}
+
+	// TODO: I think Intl or something has a Datetimeformat like strftime
+	formatTimeForSnooze(date: Date): string {
+		const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+		const dayName = days[date.getDay()];
+		
+		const hours = date.getHours().toString().padStart(2, '0');
+		const minutes = date.getMinutes().toString().padStart(2, '0');
+		const seconds = date.getSeconds().toString().padStart(2, '0');
+		
+		return `${dayName} ${hours} ${minutes} ${seconds}`;
 	}
 }
 
@@ -121,13 +216,13 @@ class SampleSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
+			.setName('Inbox Folder')
+			.setDesc('The folder to use as inbox')
 			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+				.setPlaceholder('Enter inbox folder name')
+				.setValue(this.plugin.settings.inboxFolder)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+					this.plugin.settings.inboxFolder = value;
 					await this.plugin.saveSettings();
 				}));
 	}
