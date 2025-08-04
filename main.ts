@@ -1,76 +1,39 @@
-import { App, Editor, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
 
-// Remember to rename these classes and interfaces!
-interface MyPluginSettings {
-	mySetting: string;
+interface PluginSettings {
 	inboxFolder: string;
+	dailyNotesFolder: string;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default',
-	inboxFolder: '000_inbox'
+const DEFAULT_SETTINGS: PluginSettings = {
+	inboxFolder: '000_inbox',
+	dailyNotesFolder: '001_journal'
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class MarcoModePlugin extends Plugin {
+	settings: PluginSettings;
 
 	async onload() {
+		console.log('MarcoModePlugin loaded - testing script update');
 		await this.loadSettings();
+		
+		// Wait for Obsidian to be ready, then check for daily note
+		setTimeout(() => {
+			this.checkAndImportDailyNote();
+		}, 2000);
 
-		// Command to navigate to next inbox note
-		this.addCommand({
-			id: 'go-to-next-inbox-note',
-			name: 'Go to next inbox note',
-			callback: () => {
-				this.goToNextInboxNote();
-			}
-		});
-    	this.addRibbonIcon(
-    	    'inbox', 
-    	    'Go to next inbox note',
-    	    (evt: MouseEvent) => {
-    	        this.goToNextInboxNote();
-    	    }
-    	);
+		this.addCommandAndRibbon('go-to-next-inbox-note', 'Go to next inbox note', 'inbox', () => this.goToNextInboxNote());
+		this.addCommandAndRibbon('mark-file-as-read', 'Mark file as read', 'check-square', () => this.markFileAsRead());
+		this.addCommandAndRibbon('snooze-file', 'Snooze file', 'clock', () => this.snoozeFile());
+		this.addCommandAndRibbon('create-new-inbox-note', 'Create new inbox note', 'plus', () => this.createNewInboxNote());
+		this.addCommand({ id: 'import-daily-note', name: 'Import today\'s daily note to inbox', callback: () => this.importDailyNote() });
 
-		// Command to mark file as read
-		this.addCommand({
-			id: 'mark-file-as-read',
-			name: 'Mark file as read',
-			callback: () => {
-				this.markFileAsRead();
-			}
-		});
-    	this.addRibbonIcon(
-    	    'check-square', 
-    	    'Mark file as read',
-    	    (evt: MouseEvent) => {
-    	        this.markFileAsRead();
-    	    }
-    	);
-
-		// Command to snooze file
-		this.addCommand({
-			id: 'snooze-file',
-			name: 'Snooze file',
-			callback: () => {
-				this.snoozeFile();
-			}
-		});
-    	this.addRibbonIcon(
-    	    'clock', 
-    	    'Snooze file',
-    	    (evt: MouseEvent) => {
-    	        this.snoozeFile();
-    	    }
-    	);
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.addSettingTab(new SettingTab(this.app, this));
 	}
 
-	onunload() {
-
+	addCommandAndRibbon(id: string, name: string, icon: string, callback: () => void) {
+		this.addCommand({ id, name, callback });
+		this.addRibbonIcon(icon, name, callback);
 	}
 
 	async loadSettings() {
@@ -82,74 +45,36 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async goToNextInboxNote() {
-		// Get all files in the inbox folder
-		const inboxFiles = this.getInboxFiles();
-		if (inboxFiles.length === 0) {
-			new Notice('No files found in inbox folder');
-			return;
-		}
+		const files = this.getInboxFiles().sort((a, b) => a.name.localeCompare(b.name));
+		if (!files.length) return new Notice('No files found in inbox folder');
 
-		// Sort files alphabetically by name
-		inboxFiles.sort((a, b) => a.name.localeCompare(b.name));
+		const active = this.app.workspace.getActiveFile();
+		const currentIndex = active && this.isInInbox(active) ? files.findIndex(f => f.path === active.path) : -1;
+		const nextFile = files[(currentIndex + 1) % files.length];
 
-		// Get current active file
-		const activeFile = this.app.workspace.getActiveFile();
-		let nextFile: TFile;
-
-		if (!activeFile || !this.isFileInInbox(activeFile)) {
-			// No file open or current file is not in inbox, open first file
-			nextFile = inboxFiles[0];
-		} else {
-			// Find current file index and get next one
-			const currentIndex = inboxFiles.findIndex(file => file.path === activeFile.path);
-			const nextIndex = (currentIndex + 1) % inboxFiles.length;
-			nextFile = inboxFiles[nextIndex];
-		}
-
-		// Open the next file
 		await this.app.workspace.getLeaf().openFile(nextFile);
 	}
 
 	getInboxFiles(): TFile[] {
-		const inboxPath = this.settings.inboxFolder;
-		const files = this.app.vault.getFiles();
-		return files.filter(file => {
-			const folderPath = file.parent?.path || '';
-			return folderPath === inboxPath || file.path.startsWith(inboxPath + '/');
-		});
+		return this.app.vault.getFiles().filter(file => this.isInInbox(file));
 	}
 
-	isFileInInbox(file: TFile): boolean {
-		const inboxPath = this.settings.inboxFolder;
-		const folderPath = file.parent?.path || '';
-		return folderPath === inboxPath || file.path.startsWith(inboxPath + '/');
+	isInInbox(file: TFile): boolean {
+		const folder = file.parent?.path || '';
+		return folder === this.settings.inboxFolder || file.path.startsWith(this.settings.inboxFolder + '/');
 	}
 
 	async markFileAsRead() {
-		const activeFile = this.app.workspace.getActiveFile();
-		
-		if (!activeFile) {
-			new Notice('No file is currently open');
-			return;
-		}
+		const file = this.validateInboxFile();
+		if (!file) return;
 
-		if (!this.isFileInInbox(activeFile)) {
-			new Notice('File is not in the inbox folder');
-			return;
-		}
+		if (file.name.startsWith('(READ) ')) return new Notice('File is already marked as read');
 
-		// Check if file is already marked as read
-		if (activeFile.name.startsWith('(READ) ')) {
-			new Notice('File is already marked as read');
-			return;
-		}
-
-		// Create new filename with (READ) prefix
-		const newName = '(READ) ' + activeFile.name;
-		const newPath = activeFile.parent ? activeFile.parent.path + '/' + newName : newName;
+		const newName = '(READ) ' + file.name;
+		const newPath = file.parent ? `${file.parent.path}/${newName}` : newName;
 
 		try {
-			await this.app.vault.rename(activeFile, newPath);
+			await this.app.vault.rename(file, newPath);
 			new Notice('File marked as read');
 		} catch (error) {
 			new Notice('Failed to rename file: ' + error.message);
@@ -157,72 +82,155 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async snoozeFile() {
-		const activeFile = this.app.workspace.getActiveFile();
-		
-		if (!activeFile) {
-			new Notice('No file is currently open');
-			return;
-		}
+		const file = this.validateInboxFile();
+		if (!file) return;
 
-		if (!this.isFileInInbox(activeFile)) {
-			new Notice('File is not in the inbox folder');
-			return;
-		}
-
-		// Format current time as "EEE HH mm ss" (e.g., "Tue 09 41 00")
-		const now = new Date();
-		const timeString = this.formatTimeForSnooze(now);
-		
-		// Get file extension
-		const extension = activeFile.extension;
-		const nameWithoutExt = activeFile.basename;
-		
-		// Create new filename with time prefix
-		const newName = `${timeString} (snoozed).${extension}`;
-		const newPath = activeFile.parent ? activeFile.parent.path + '/' + newName : newName;
+		const timestamp = this.formatTimestamp(new Date());
+		const newName = `${timestamp} (snoozed).${file.extension}`;
+		const newPath = file.parent ? `${file.parent.path}/${newName}` : newName;
 
 		try {
-			await this.app.vault.rename(activeFile, newPath);
-			new Notice(`File snoozed with timestamp: ${timeString}`);
+			await this.app.vault.rename(file, newPath);
+			new Notice(`File snoozed with timestamp: ${timestamp}`);
 		} catch (error) {
 			new Notice('Failed to snooze file: ' + error.message);
 		}
 	}
 
-	// TODO: I think Intl or something has a Datetimeformat like strftime
-	formatTimeForSnooze(date: Date): string {
+	validateInboxFile(): TFile | null {
+		const file = this.app.workspace.getActiveFile();
+		if (!file) {
+			new Notice('No file is currently open');
+			return null;
+		}
+		if (!this.isInInbox(file)) {
+			new Notice('File is not in the inbox folder');
+			return null;
+		}
+		return file;
+	}
+
+	formatTimestamp(date: Date): string {
 		const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-		const dayName = days[date.getDay()];
-		
+		const day = days[date.getDay()];
 		const hours = date.getHours().toString().padStart(2, '0');
 		const minutes = date.getMinutes().toString().padStart(2, '0');
 		const seconds = date.getSeconds().toString().padStart(2, '0');
+		return `${day} ${hours} ${minutes} ${seconds}`;
+	}
+
+	async checkAndImportDailyNote() {
+		console.log('Checking for daily note content...');
+		const hasReminders = await this.todaysDailyNoteHasContent();
+		console.log('Has reminders:', hasReminders);
+		if (hasReminders) {
+			console.log('Opening modal...');
+			new ImportConfirmModal(this.app, () => this.importDailyNote()).open();
+		}
+	}
+
+	async createNewInboxNote() {
+		const timestamp = this.formatTimestamp(new Date());
+		const inboxPath = `${this.settings.inboxFolder}/${timestamp}.md`;
 		
-		return `${dayName} ${hours} ${minutes} ${seconds}`;
+		try {
+			await this.app.vault.create(inboxPath, '');
+			await this.app.workspace.getLeaf().openFile(this.app.vault.getAbstractFileByPath(inboxPath) as TFile);
+			new Notice(`Created new inbox note: ${timestamp}.md`);
+		} catch (error) {
+			new Notice('Failed to create inbox note: ' + error.message);
+		}
+	}
+
+	async todaysDailyNoteHasContent(): Promise<boolean> {
+		const dateString = new Date().toISOString().split('T')[0];
+		const path = `${this.settings.dailyNotesFolder}/${dateString}.md`;
+		const file = this.app.vault.getAbstractFileByPath(path);
+		
+		if (!file || !(file instanceof TFile)) return false;
+		
+		const content = await this.app.vault.read(file);
+		return content.trim().length > 0;
+	}
+
+	async importDailyNote() {
+		const date = new Date();
+		const dateString = date.toISOString().split('T')[0];
+		const dailyPath = `${this.settings.dailyNotesFolder}/${dateString}.md`;
+		
+		const dailyNote = this.app.vault.getAbstractFileByPath(dailyPath);
+		if (!dailyNote || !(dailyNote instanceof TFile)) return;
+
+		const content = await this.app.vault.read(dailyNote);
+		if (!content.trim()) return;
+
+		const timestamp = this.formatTimestamp(date);
+		const inboxPath = `${this.settings.inboxFolder}/${timestamp}.md`;
+		
+		try {
+			await this.app.vault.create(inboxPath, content);
+			await this.app.vault.modify(dailyNote, '');
+			new Notice(`Imported daily note reminders from ${dateString} to inbox and cleared daily note`);
+		} catch (error) {
+			console.error('Failed to import daily note:', error);
+		}
 	}
 }
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+class ImportConfirmModal extends Modal {
+	onConfirm: () => void;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, onConfirm: () => void) {
+		super(app);
+		this.onConfirm = onConfirm;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.createEl('h2', { text: 'Import Daily Note' });
+		contentEl.createEl('p', { text: 'Today\'s daily note contains reminders or events. Import to inbox and clear daily note?' });
+
+		const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
+		
+		const importBtn = buttonContainer.createEl('button', { text: 'Import & Clear', cls: 'mod-cta' });
+		importBtn.onclick = () => {
+			this.close();
+			this.onConfirm();
+		};
+
+		const cancelBtn = buttonContainer.createEl('button', { text: 'Cancel' });
+		cancelBtn.onclick = () => this.close();
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+	}
+}
+
+class SettingTab extends PluginSettingTab {
+	plugin: MarcoModePlugin;
+
+	constructor(app: App, plugin: MarcoModePlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		this.containerEl.empty();
 
-		containerEl.empty();
+		this.addTextSetting('Inbox Folder', 'The folder to use as inbox', 'inboxFolder');
+		this.addTextSetting('Daily Notes Folder', 'The folder containing daily notes', 'dailyNotesFolder');
+	}
 
-		new Setting(containerEl)
-			.setName('Inbox Folder')
-			.setDesc('The folder to use as inbox')
+	addTextSetting(name: string, desc: string, key: keyof PluginSettings) {
+		new Setting(this.containerEl)
+			.setName(name)
+			.setDesc(desc)
 			.addText(text => text
-				.setPlaceholder('Enter inbox folder name')
-				.setValue(this.plugin.settings.inboxFolder)
+				.setValue(this.plugin.settings[key])
 				.onChange(async (value) => {
-					this.plugin.settings.inboxFolder = value;
+					this.plugin.settings[key] = value;
 					await this.plugin.saveSettings();
 				}));
 	}
