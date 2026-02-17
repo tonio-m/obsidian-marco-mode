@@ -1,17 +1,21 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, SuggestModal, TFile, moment } from 'obsidian';
+import { App, Menu, Modal, Notice, Plugin, PluginSettingTab, Setting, SuggestModal, TAbstractFile, TFile, moment } from 'obsidian';
 
 interface PluginSettings {
 	inboxFolder: string;
 	dailyNotesFolder: string;
 	timestampFormat: string;
 	lastImportDate: string;
+	dummySetting: string;
+	enableDailyNoteCheck: boolean;
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
 	inboxFolder: '000_inbox',
 	dailyNotesFolder: '001_journal',
 	timestampFormat: 'ddd HH mm ss',
-	lastImportDate: ''
+	lastImportDate: '',
+	dummySetting: '',
+	enableDailyNoteCheck: true
 }
 
 export default class MarcoModePlugin extends Plugin {
@@ -23,7 +27,9 @@ export default class MarcoModePlugin extends Plugin {
 		
 		// Wait for Obsidian to be ready, then check for daily note
 		setTimeout(() => {
-			this.checkAndImportDailyNote();
+			if (this.settings.enableDailyNoteCheck) {
+				this.checkAndImportDailyNote();
+			}
 		}, 2000);
 
 		this.addCommandAndRibbon('go-to-next-inbox-note', 'Go to next inbox note', 'inbox', () => this.goToNextInboxNote());
@@ -33,6 +39,19 @@ export default class MarcoModePlugin extends Plugin {
 		this.addCommand({ id: 'import-daily-note', name: 'Import today\'s daily note to inbox', callback: () => this.importDailyNote() });
 		this.addCommand({ id: 'append-to-daily-note', name: 'Append inbox note to daily note', callback: () => this.appendToDailyNote() });
 		this.addCommand({ id: 'merge-inbox-notes', name: 'Merge inbox notes', callback: () => this.mergeInboxNotes() });
+
+		// Register file menu event for right-click context menu
+		this.registerEvent(
+			this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile) => {
+				if (file instanceof TFile && this.isInInbox(file)) {
+					menu.addItem((item) => {
+						item.setTitle('Append to daily note (from filename)')
+							.setIcon('calendar')
+							.onClick(() => this.appendToDailyNoteFromFilename(file));
+					});
+				}
+			})
+		);
 
 		this.addSettingTab(new SettingTab(this.app, this));
 	}
@@ -155,6 +174,19 @@ export default class MarcoModePlugin extends Plugin {
 		new DateSuggestModal(this.app, async (selectedDate: string) => {
 			await this.moveInboxNoteToDailyNote(activeFile, selectedDate);
 		}).open();
+	}
+
+	async appendToDailyNoteFromFilename(file: TFile) {
+		const filenameWithoutExt = file.basename;
+		const parsedDate = moment(filenameWithoutExt, this.settings.timestampFormat, true);
+
+		if (!parsedDate.isValid()) {
+			new Notice(`Could not parse date from filename "${filenameWithoutExt}" using format "${this.settings.timestampFormat}"`);
+			return;
+		}
+
+		const targetDate = parsedDate.format('YYYY-MM-DD');
+		await this.moveInboxNoteToDailyNote(file, targetDate);
 	}
 
 	async moveInboxNoteToDailyNote(inboxFile: TFile, targetDate: string) {
@@ -537,16 +569,28 @@ class SettingTab extends PluginSettingTab {
 		this.addTextSetting('Inbox Folder', 'The folder to use as inbox', 'inboxFolder');
 		this.addTextSetting('Daily Notes Folder', 'The folder containing daily notes', 'dailyNotesFolder');
 		this.addTextSetting('Timestamp Format', 'Moment.js format string for timestamps (e.g., "ddd HH mm ss" for "Mon 16 33 00")', 'timestampFormat');
+		this.addTextSetting('Dummy Setting', 'This setting does nothing', 'dummySetting');
+
+		new Setting(this.containerEl)
+			.setName('Enable Daily Note Check')
+			.setDesc('Check for daily note content on startup and prompt to import')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableDailyNoteCheck)
+				.onChange(async (value) => {
+					this.plugin.settings.enableDailyNoteCheck = value;
+					await this.plugin.saveSettings();
+				}));
 	}
 
-	addTextSetting(name: string, desc: string, key: keyof PluginSettings) {
+	addTextSetting(name: string, desc: string, key: keyof PluginSettings & string) {
 		new Setting(this.containerEl)
 			.setName(name)
 			.setDesc(desc)
 			.addText(text => text
-				.setValue(this.plugin.settings[key])
+				.setValue(this.plugin.settings[key] as string)
 				.onChange(async (value) => {
-					this.plugin.settings[key] = value;
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					(this.plugin.settings as any)[key] = value;
 					await this.plugin.saveSettings();
 				}));
 	}
