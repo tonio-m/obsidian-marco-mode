@@ -1,0 +1,46 @@
+name: Release Obsidian Plugin
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18.x'
+
+      - name: Build plugin
+        run: |
+          npm install
+          npm run build
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" \
+            main.js \
+            manifest.json \
+            styles.css \
+            --title "Marco Mode $tag" \
+            --notes "## Marco Mode $tag
+
+### Features
+- Inbox management: cycle through inbox notes, mark as read, snooze with timestamps
+- Daily note integration: auto-import on startup, manual import, append to daily notes
+- Natural language date processing (\"today\", \"tomorrow\", \"last friday\", etc.)
+- Smart date picker via SuggestModal with auto-completion
+- Timestamped note creation in inbox folder
+- Configurable inbox and daily notes folder paths
+
+### Installation
+Download \`main.js\`, \`manifest.json\`, and \`styles.css\` and place them in your vault's \`.obsidian/plugins/obsidian-marco-mode/\` folder."
