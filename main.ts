@@ -38,6 +38,7 @@ export default class MarcoModePlugin extends Plugin {
 		this.addCommandAndRibbon('create-new-inbox-note', 'Create new inbox note', 'plus', () => this.createNewInboxNote());
 		this.addCommand({ id: 'import-daily-note', name: 'Import today\'s daily note to inbox', callback: () => this.importDailyNote() });
 		this.addCommand({ id: 'append-to-daily-note', name: 'Append inbox note to daily note', callback: () => this.appendToDailyNote() });
+		this.addCommand({ id: 'append-to-daily-note-from-filename', name: 'Append to daily note (from filename)', callback: () => this.appendToDailyNoteFromFilenameCurrentFile() });
 		this.addCommand({ id: 'merge-inbox-notes', name: 'Merge inbox notes', callback: () => this.mergeInboxNotes() });
 
 		// Register file menu event for right-click context menu
@@ -174,6 +175,19 @@ export default class MarcoModePlugin extends Plugin {
 		new DateSuggestModal(this.app, async (selectedDate: string) => {
 			await this.moveInboxNoteToDailyNote(activeFile, selectedDate);
 		}).open();
+	}
+
+	async appendToDailyNoteFromFilenameCurrentFile() {
+		const file = this.app.workspace.getActiveFile();
+		if (!file) {
+			new Notice('No file is currently open');
+			return;
+		}
+		if (!this.isInInbox(file)) {
+			new Notice('This command only works on files in the inbox folder');
+			return;
+		}
+		await this.appendToDailyNoteFromFilename(file);
 	}
 
 	async appendToDailyNoteFromFilename(file: TFile) {

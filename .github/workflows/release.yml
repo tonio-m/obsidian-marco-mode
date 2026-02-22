@@ -2,45 +2,54 @@ name: Release Obsidian Plugin
 
 on:
   push:
-    tags:
-      - '*'
+    branches:
+      - master
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Use Node.js
-        uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
         with:
-          node-version: '18.x'
+          fetch-depth: 0
+
+      - name: Get version from manifest
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' manifest.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if release exists
+        id: check_release
+        run: |
+          if gh release view "${{ steps.version.outputs.version }}" &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Setup Node.js
+        if: steps.check_release.outputs.exists == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        if: steps.check_release.outputs.exists == 'false'
+        run: npm install
 
       - name: Build plugin
-        run: |
-          npm install
-          npm run build
+        if: steps.check_release.outputs.exists == 'false'
+        run: npm run build
 
-      - name: Create release
+      - name: Create Release
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          gh release create "${{ steps.version.outputs.version }}" \
+            --title "${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            manifest.json main.js styles.css
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          gh release create "$tag" \
-            main.js \
-            manifest.json \
-            styles.css \
-            --title "Marco Mode $tag" \
-            --notes "## Marco Mode $tag
-
-### Features
-- Inbox management: cycle through inbox notes, mark as read, snooze with timestamps
-- Daily note integration: auto-import on startup, manual import, append to daily notes
-- Natural language date processing (\"today\", \"tomorrow\", \"last friday\", etc.)
-- Smart date picker via SuggestModal with auto-completion
-- Timestamped note creation in inbox folder
-- Configurable inbox and daily notes folder paths
-
-### Installation
-Download \`main.js\`, \`manifest.json\`, and \`styles.css\` and place them in your vault's \`.obsidian/plugins/obsidian-marco-mode/\` folder."
+          GH_TOKEN: ${{ github.token }}
